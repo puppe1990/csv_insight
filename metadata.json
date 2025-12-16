@@ -1,0 +1,5 @@
+{
+  "name": "CSV Insight",
+  "description": "A powerful CSV reader with drag-and-drop support, data visualization, and AI-powered insights using Gemini.",
+  "requestFramePermissions": []
+}
