@@ -1,3 +1,4 @@
+
 import React, { useState } from 'react';
 import { FileUpload } from './components/FileUpload';
 import { DataTable } from './components/DataTable';
@@ -5,9 +6,10 @@ import { DataVisualizer } from './components/DataVisualizer';
 import { AiAssistant } from './components/AiAssistant';
 import { DataComparator } from './components/DataComparator';
 import { AppView, DashboardTab, CsvRow, ParseResult } from './types';
-import { LayoutGrid, Table as TableIcon, BarChart2, MessageSquare, Database, X, ArrowLeftRight, Check, FileSpreadsheet, Play, Download } from 'lucide-react';
+import { LayoutGrid, Table as TableIcon, BarChart2, MessageSquare, Database, X, ArrowLeftRight, Check, FileSpreadsheet, Play, Download, Table2 } from 'lucide-react';
 import { Button } from './components/Button';
 import * as d3 from 'd3';
+import * as XLSX from 'xlsx';
 
 const App: React.FC = () => {
   const [view, setView] = useState<AppView>(AppView.UPLOAD);
@@ -95,25 +97,42 @@ const App: React.FC = () => {
 
   const handleExportCsv = () => {
     if (!data) return;
-    
-    // Generate CSV string
     const csv = d3.csvFormat(data.data, data.columns);
-    
-    // Create download link
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
+    const originalName = data.meta.fileName || 'export.csv';
+    const timestamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 12);
+    const filename = originalName.startsWith('edited_') 
+      ? originalName.replace('.csv', `_${timestamp}.csv`) 
+      : `edited_${originalName.replace('.csv', '')}_${timestamp}.csv`;
+    
     const link = document.createElement('a');
     link.setAttribute('href', url);
-    
-    // Prefix filename with "edited_" if it exists, otherwise "export.csv"
-    const originalName = data.meta.fileName || 'export.csv';
-    const filename = originalName.startsWith('edited_') ? originalName : `edited_${originalName}`;
-    
     link.setAttribute('download', filename);
     link.style.visibility = 'hidden';
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+  };
+
+  const handleExportExcel = () => {
+    if (!data) return;
+    
+    // Create a new workbook and worksheet from JSON data
+    const worksheet = XLSX.utils.json_to_sheet(data.data);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Data");
+    
+    // Prepare filename with timestamp
+    const timestamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 12); // Format: YYYYMMDDHHmm
+    const originalName = data.meta.fileName || 'export.xlsx';
+    let baseFileName = originalName.replace('.csv', '').replace('.xlsx', '');
+    
+    let filename = `${baseFileName}_${timestamp}.xlsx`;
+    if (!filename.startsWith('edited_')) filename = `edited_${filename}`;
+
+    // Export the file
+    XLSX.writeFile(workbook, filename);
   };
 
   const TabButton = ({ tab, label, icon }: { tab: DashboardTab, label: string, icon: React.ReactNode }) => (
@@ -138,12 +157,12 @@ const App: React.FC = () => {
           <div className="bg-blue-600 p-2 rounded-lg">
             <Database className="w-5 h-5 text-white" />
           </div>
-          <h1 className="text-xl font-bold text-slate-800 tracking-tight">CSV Insight</h1>
+          <h1 className="text-xl font-bold text-slate-800 tracking-tight text-nowrap">CSV Insight</h1>
         </div>
         
         {view === AppView.DASHBOARD && data && (
-          <div className="flex items-center space-x-6">
-            <div className="hidden md:flex items-center text-sm text-slate-500 space-x-4 border-r border-slate-200 pr-6">
+          <div className="flex items-center space-x-2 sm:space-x-4">
+            <div className="hidden lg:flex items-center text-sm text-slate-500 space-x-4 border-r border-slate-200 pr-6">
               <span className="flex items-center">
                 <span className="font-semibold text-slate-700 mr-1">{data.meta.rowCount}</span> Rows
               </span>
@@ -155,20 +174,32 @@ const App: React.FC = () => {
               </span>
             </div>
             
-            <button 
-              onClick={handleExportCsv}
-              className="text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 px-3 py-1.5 rounded-lg transition-colors flex items-center text-sm font-medium"
-            >
-              <Download className="w-4 h-4 mr-1.5" />
-              Export CSV
-            </button>
+            <div className="flex items-center space-x-1 sm:space-x-2">
+              <button 
+                onClick={handleExportCsv}
+                className="text-slate-600 hover:text-slate-800 hover:bg-slate-50 px-3 py-1.5 rounded-lg transition-colors flex items-center text-xs sm:text-sm font-medium border border-slate-200"
+                title="Download as CSV"
+              >
+                <Download className="w-4 h-4 mr-1.5" />
+                <span className="hidden sm:inline">CSV</span>
+              </button>
+
+              <button 
+                onClick={handleExportExcel}
+                className="text-green-700 hover:text-green-800 hover:bg-green-50 px-3 py-1.5 rounded-lg transition-colors flex items-center text-xs sm:text-sm font-medium border border-green-200 bg-green-50/30"
+                title="Download as Excel"
+              >
+                <Table2 className="w-4 h-4 mr-1.5" />
+                <span className="hidden sm:inline">Excel</span>
+              </button>
+            </div>
 
             <button 
               onClick={handleReset}
-              className="text-slate-500 hover:text-red-600 hover:bg-red-50 px-3 py-1.5 rounded-lg transition-colors flex items-center text-sm font-medium"
+              className="text-slate-400 hover:text-red-600 hover:bg-red-50 p-2 rounded-lg transition-colors"
+              title="Close File"
             >
-              <X className="w-4 h-4 mr-1.5" />
-              Close File
+              <X className="w-5 h-5" />
             </button>
           </div>
         )}

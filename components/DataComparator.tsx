@@ -1,9 +1,11 @@
+
 import React, { useState, useMemo } from 'react';
 import { CsvRow, ParseResult } from '../types';
 import { DataTable } from './DataTable';
 import { Button } from './Button';
 import * as d3 from 'd3';
-import { ArrowLeftRight, Check, X, FileMinus, AlertCircle, Calculator, Download } from 'lucide-react';
+import * as XLSX from 'xlsx';
+import { ArrowLeftRight, Check, X, FileMinus, AlertCircle, Calculator, Download, Table2 } from 'lucide-react';
 
 interface DataComparatorProps {
   data1: ParseResult;
@@ -170,30 +172,46 @@ export const DataComparator: React.FC<DataComparatorProps> = ({ data1, data2 }) 
 
   }, [selectedRow, viewMode, data1.columns, data2.columns, joinKey]);
 
-  const handleExport = () => {
-    const dataToExport = viewMode === 'matches' ? comparisonResult.matches :
-                         viewMode === 'unique1' ? comparisonResult.unique1 :
-                         comparisonResult.unique2;
-    
+  const getExportData = () => {
+    return viewMode === 'matches' ? comparisonResult.matches :
+           viewMode === 'unique1' ? comparisonResult.unique1 :
+           comparisonResult.unique2;
+  };
+
+  const getExportFileName = (ext: string) => {
+    const timestamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 12);
+    let baseName = 'export';
+    if (viewMode === 'matches') baseName = 'comparison_matches';
+    else if (viewMode === 'unique1') baseName = `unique_to_${data1.meta.fileName.replace('.csv', '')}`;
+    else baseName = `unique_to_${data2.meta.fileName.replace('.csv', '')}`;
+    return `${baseName}_${timestamp}.${ext}`;
+  };
+
+  const handleExportCsv = () => {
+    const dataToExport = getExportData();
     if (dataToExport.length === 0) return;
 
     const csv = d3.csvFormat(dataToExport, currentColumns);
-    
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.setAttribute('href', url);
-    
-    let fileName = 'export.csv';
-    if (viewMode === 'matches') fileName = 'comparison_matches.csv';
-    else if (viewMode === 'unique1') fileName = `unique_to_${data1.meta.fileName.replace('.csv', '')}.csv`;
-    else fileName = `unique_to_${data2.meta.fileName.replace('.csv', '')}.csv`;
-    
-    link.setAttribute('download', fileName);
+    link.setAttribute('download', getExportFileName('csv'));
     link.style.visibility = 'hidden';
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+  };
+
+  const handleExportExcel = () => {
+    const dataToExport = getExportData();
+    if (dataToExport.length === 0) return;
+
+    // We use the currentColumns to ensure the Excel has the same order as shown
+    const worksheet = XLSX.utils.json_to_sheet(dataToExport, { header: currentColumns });
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Comparison");
+    XLSX.writeFile(workbook, getExportFileName('xlsx'));
   };
 
   if (commonColumns.length === 0) {
@@ -232,18 +250,27 @@ export const DataComparator: React.FC<DataComparatorProps> = ({ data1, data2 }) 
           </div>
         </div>
         
-        <Button 
-          variant="secondary" 
-          onClick={handleExport}
-          icon={<Download className="w-4 h-4" />}
-          disabled={
-            (viewMode === 'matches' && comparisonResult.matches.length === 0) ||
-            (viewMode === 'unique1' && comparisonResult.unique1.length === 0) ||
-            (viewMode === 'unique2' && comparisonResult.unique2.length === 0)
-          }
-        >
-          Export {viewMode === 'matches' ? 'Matches' : 'List'}
-        </Button>
+        <div className="flex items-center space-x-2">
+          <Button 
+            variant="secondary" 
+            size="sm"
+            onClick={handleExportCsv}
+            icon={<Download className="w-4 h-4" />}
+            disabled={getExportData().length === 0}
+          >
+            CSV
+          </Button>
+          <Button 
+            variant="secondary" 
+            size="sm"
+            className="text-green-700 border-green-200 bg-green-50/30 hover:bg-green-50 hover:border-green-300"
+            onClick={handleExportExcel}
+            icon={<Table2 className="w-4 h-4" />}
+            disabled={getExportData().length === 0}
+          >
+            Excel
+          </Button>
+        </div>
       </div>
 
       {/* Stats Cards / Navigation */}

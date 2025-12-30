@@ -1,7 +1,8 @@
-import React, { useState, useMemo, useEffect, useRef } from 'react';
+import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { CsvRow } from '../types';
-import { ChevronLeft, ChevronRight, Search, ArrowUpDown, ArrowUp, ArrowDown, Trash2, Plus } from 'lucide-react';
+import { Search, ArrowUpDown, ArrowUp, ArrowDown, Trash2, Plus, Calculator } from 'lucide-react';
 import { Button } from './Button';
+import * as d3 from 'd3';
 
 interface DataTableProps {
   data: CsvRow[];
@@ -25,6 +26,11 @@ interface EditingCell {
   col: string;
 }
 
+interface SelectionPoint {
+  rowIndex: number; // Index in the current visible (sorted/filtered) list
+  colIndex: number;
+}
+
 export const DataTable: React.FC<DataTableProps> = ({ 
   data, 
   columns, 
@@ -34,11 +40,14 @@ export const DataTable: React.FC<DataTableProps> = ({
   onRowAdd,
   isEditable = false
 }) => {
-  const [currentPage, setCurrentPage] = useState(1);
-  const [rowsPerPage] = useState(15);
   const [searchTerm, setSearchTerm] = useState('');
   const [sortConfig, setSortConfig] = useState<SortConfig | null>(null);
   
+  // Selection State
+  const [selectionStart, setSelectionStart] = useState<SelectionPoint | null>(null);
+  const [selectionEnd, setSelectionEnd] = useState<SelectionPoint | null>(null);
+  const [isSelecting, setIsSelecting] = useState(false);
+
   // Editing State
   const [editingCell, setEditingCell] = useState<EditingCell | null>(null);
   const [editValue, setEditValue] = useState<string>('');
@@ -66,16 +75,13 @@ export const DataTable: React.FC<DataTableProps> = ({
       const aValue = a[sortConfig.key];
       const bValue = b[sortConfig.key];
 
-      // Handle null values
-      if (aValue === null) return 1;
-      if (bValue === null) return -1;
+      if (aValue === null || aValue === undefined) return 1;
+      if (bValue === null || bValue === undefined) return -1;
 
-      // Check if values are numbers for correct numeric sorting
       if (typeof aValue === 'number' && typeof bValue === 'number') {
         return sortConfig.direction === 'asc' ? aValue - bValue : bValue - aValue;
       }
 
-      // String sorting
       const strA = String(aValue).toLowerCase();
       const strB = String(bValue).toLowerCase();
       
@@ -85,38 +91,120 @@ export const DataTable: React.FC<DataTableProps> = ({
     });
   }, [filteredData, sortConfig]);
 
-  // Pagination logic
-  const totalPages = Math.ceil(sortedData.length / rowsPerPage);
-  const paginatedData = useMemo(() => {
-    const start = (currentPage - 1) * rowsPerPage;
-    return sortedData.slice(start, start + rowsPerPage);
-  }, [sortedData, currentPage, rowsPerPage]);
+  // --- Selection Logic ---
+  const handleCellMouseDown = (rowIndex: number, colIndex: number, e: React.MouseEvent) => {
+    if (editingCell) return;
+    
+    // Check if clicking the index column for row selection
+    if (colIndex === -1) {
+      setSelectionStart({ rowIndex, colIndex: 0 });
+      setSelectionEnd({ rowIndex, colIndex: columns.length - 1 });
+      setIsSelecting(true);
+      return;
+    }
 
-  // Focus input when editing starts
+    if (e.shiftKey && selectionStart) {
+      setSelectionEnd({ rowIndex, colIndex });
+    } else {
+      setSelectionStart({ rowIndex, colIndex });
+      setSelectionEnd({ rowIndex, colIndex });
+      setIsSelecting(true);
+    }
+  };
+
+  const handleColumnHeaderClick = (colIndex: number, e: React.MouseEvent) => {
+    // Select whole column if not clicking on the sort button area specifically
+    // but typically Excel-like implies clicking the header selects the column.
+    // We'll allow Shift+Click for column range selection.
+    if (e.altKey || e.ctrlKey || e.metaKey) {
+       // Allow sorting via standard click, selection via modifier or vice versa?
+       // Let's make sorting the primary click, but adding a specific "selection" behavior
+    }
+  };
+
+  const handleCellMouseEnter = (rowIndex: number, colIndex: number) => {
+    if (isSelecting) {
+      setSelectionEnd({ rowIndex, colIndex });
+    }
+  };
+
+  const handleMouseUp = useCallback(() => {
+    setIsSelecting(false);
+  }, []);
+
   useEffect(() => {
-    if (editingCell && inputRef.current) {
-      inputRef.current.focus();
-    }
-  }, [editingCell]);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => window.removeEventListener('mouseup', handleMouseUp);
+  }, [handleMouseUp]);
 
-  const handleSearch = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setSearchTerm(e.target.value);
-    setCurrentPage(1); // Reset to first page on search
+  const isCellSelected = (rowIndex: number, colIndex: number) => {
+    if (!selectionStart || !selectionEnd) return false;
+    
+    const minRow = Math.min(selectionStart.rowIndex, selectionEnd.rowIndex);
+    const maxRow = Math.max(selectionStart.rowIndex, selectionEnd.rowIndex);
+    const minCol = Math.min(selectionStart.colIndex, selectionEnd.colIndex);
+    const maxCol = Math.max(selectionStart.colIndex, selectionEnd.colIndex);
+
+    return (
+      rowIndex >= minRow && 
+      rowIndex <= maxRow && 
+      colIndex >= minCol && 
+      colIndex <= maxCol
+    );
   };
 
-  const handleSort = (key: string) => {
-    let direction: SortDirection = 'asc';
-    if (sortConfig && sortConfig.key === key && sortConfig.direction === 'asc') {
-      direction = 'desc';
-    }
-    setSortConfig({ key, direction });
-  };
+  // Calculate Statistics for Selection
+  const stats = useMemo(() => {
+    if (!selectionStart || !selectionEnd) return null;
 
-  // Editing Handlers
+    const minRow = Math.min(selectionStart.rowIndex, selectionEnd.rowIndex);
+    const maxRow = Math.max(selectionStart.rowIndex, selectionEnd.rowIndex);
+    const minCol = Math.min(selectionStart.colIndex, selectionEnd.colIndex);
+    const maxCol = Math.max(selectionStart.colIndex, selectionEnd.colIndex);
+
+    const values: number[] = [];
+    let cellCount = 0;
+
+    for (let r = minRow; r <= maxRow; r++) {
+      const row = sortedData[r];
+      if (!row) continue;
+      for (let c = minCol; c <= maxCol; c++) {
+        cellCount++;
+        const colName = columns[c];
+        const val = row[colName];
+        const num = typeof val === 'number' ? val : parseFloat(String(val));
+        if (!isNaN(num)) {
+          values.push(num);
+        }
+      }
+    }
+
+    if (values.length === 0) return { cellCount, numericCount: 0 };
+
+    const sum = d3.sum(values);
+    const avg = d3.mean(values);
+    const median = d3.median(values);
+    const min = d3.min(values);
+    const max = d3.max(values);
+
+    return {
+      cellCount,
+      numericCount: values.length,
+      sum,
+      avg,
+      median,
+      min,
+      max
+    };
+  }, [selectionStart, selectionEnd, sortedData, columns]);
+
+  // --- Editing Handlers ---
   const startEditing = (row: any, col: string) => {
     if (!isEditable) return;
     setEditingCell({ rowIndex: row._originalIndex, col });
     setEditValue(row[col] === null ? '' : String(row[col]));
+    setSelectionStart(null);
+    setSelectionEnd(null);
   };
 
   const cancelEditing = () => {
@@ -130,9 +218,7 @@ export const DataTable: React.FC<DataTableProps> = ({
     const { rowIndex, col } = editingCell;
     const newData = [...data];
     
-    // Attempt to preserve type (number vs string)
     let finalValue: string | number | null = editValue;
-    
     if (editValue.trim() === '') {
        finalValue = ''; 
     } else {
@@ -142,9 +228,7 @@ export const DataTable: React.FC<DataTableProps> = ({
         }
     }
 
-    // Update specific row using original index
     newData[rowIndex] = { ...newData[rowIndex], [col]: finalValue };
-    
     onDataChange(newData);
     setEditingCell(null);
   };
@@ -155,6 +239,16 @@ export const DataTable: React.FC<DataTableProps> = ({
     } else if (e.key === 'Escape') {
       cancelEditing();
     }
+  };
+
+  const formatStat = (val: number | undefined) => {
+    if (val === undefined) return '-';
+    return Number.isInteger(val) ? val.toLocaleString() : val.toLocaleString(undefined, { maximumFractionDigits: 2 });
+  };
+
+  const handleSelectWholeColumn = (colIndex: number) => {
+    setSelectionStart({ rowIndex: 0, colIndex });
+    setSelectionEnd({ rowIndex: sortedData.length - 1, colIndex });
   };
 
   return (
@@ -170,10 +264,13 @@ export const DataTable: React.FC<DataTableProps> = ({
             placeholder="Search data..."
             className="pl-10 pr-4 py-2 w-full border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-shadow"
             value={searchTerm}
-            onChange={handleSearch}
+            onChange={(e) => setSearchTerm(e.target.value)}
           />
         </div>
         <div className="flex items-center space-x-4">
+            <div className="hidden md:block text-xs text-slate-400 bg-slate-100 px-2 py-1 rounded border border-slate-200 font-medium">
+                Drag index for row / Header for column
+            </div>
             {isEditable && (
                 <div className="flex items-center space-x-3">
                   <div className="text-xs text-amber-600 bg-amber-50 px-2 py-1 rounded border border-amber-200 font-medium">
@@ -192,35 +289,52 @@ export const DataTable: React.FC<DataTableProps> = ({
                 </div>
             )}
             <div className="text-sm text-slate-500 font-medium">
-            Showing {filteredData.length} rows
+              Total {sortedData.length} rows
             </div>
         </div>
       </div>
 
-      {/* Table Area */}
-      <div className="flex-1 overflow-auto relative">
-        <table className="w-full text-left text-sm border-collapse">
-          <thead className="bg-slate-50 sticky top-0 z-10 shadow-sm">
+      {/* Table Area - Full Dataset */}
+      <div className="flex-1 overflow-auto relative select-none">
+        <table className="w-full text-left text-sm border-separate border-spacing-0">
+          <thead className="bg-slate-50 sticky top-0 z-20 shadow-sm">
             <tr>
-              {/* Index Column */}
-              <th className="px-3 py-3 font-semibold text-slate-400 w-12 border-b border-slate-200 bg-slate-50 text-center">
+              <th className="px-3 py-3 font-semibold text-slate-400 w-12 border-b border-r border-slate-200 bg-slate-50 text-center sticky left-0 z-30">
                 #
               </th>
-              {columns.map((col) => (
+              {columns.map((col, colIdx) => (
                 <th 
                   key={col} 
-                  className="px-6 py-3 font-semibold text-slate-700 whitespace-nowrap border-b border-slate-200 cursor-pointer hover:bg-slate-100 transition-colors select-none group"
-                  onClick={() => handleSort(col)}
+                  className="px-6 py-3 font-semibold text-slate-700 whitespace-nowrap border-b border-slate-200 cursor-pointer hover:bg-slate-100 transition-colors group select-none relative"
                 >
-                  <div className="flex items-center space-x-1">
-                    <span>{col}</span>
-                    <span className="text-slate-400 group-hover:text-slate-600 transition-opacity">
-                      {sortConfig?.key === col ? (
-                        sortConfig.direction === 'asc' ? <ArrowUp className="w-4 h-4" /> : <ArrowDown className="w-4 h-4" />
-                      ) : (
-                        <ArrowUpDown className="w-4 h-4 opacity-0 group-hover:opacity-50" />
-                      )}
-                    </span>
+                  <div className="flex items-center justify-between">
+                    <div className="flex-1 flex items-center space-x-1" onClick={() => {
+                      let direction: SortDirection = 'asc';
+                      if (sortConfig && sortConfig.key === col && sortConfig.direction === 'asc') {
+                        direction = 'desc';
+                      }
+                      setSortConfig({ key: col, direction });
+                    }}>
+                      <span>{col}</span>
+                      <span className="text-slate-400 group-hover:text-slate-600 transition-opacity">
+                        {sortConfig?.key === col ? (
+                          sortConfig.direction === 'asc' ? <ArrowUp className="w-4 h-4" /> : <ArrowDown className="w-4 h-4" />
+                        ) : (
+                          <ArrowUpDown className="w-4 h-4 opacity-0 group-hover:opacity-50" />
+                        )}
+                      </span>
+                    </div>
+                    {/* Invisible hit-area to select column */}
+                    <div 
+                      className="w-4 h-4 ml-2 hover:bg-slate-200 rounded flex items-center justify-center text-[10px] text-slate-400 opacity-0 group-hover:opacity-100"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleSelectWholeColumn(colIdx);
+                      }}
+                      title="Select whole column"
+                    >
+                      ▼
+                    </div>
                   </div>
                 </th>
               ))}
@@ -232,26 +346,31 @@ export const DataTable: React.FC<DataTableProps> = ({
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {paginatedData.length > 0 ? (
-              paginatedData.map((row, rowIndex) => (
+            {sortedData.length > 0 ? (
+              sortedData.map((row, rowIndex) => (
                 <tr 
                   key={row._originalIndex}
-                  className={`hover:bg-blue-50/50 transition-colors group ${onRowClick && !isEditable ? 'cursor-pointer active:bg-blue-100' : ''}`}
-                  onClick={() => onRowClick && !isEditable && onRowClick(row)}
+                  className={`hover:bg-slate-50/50 transition-colors group ${onRowClick && !isEditable ? 'cursor-pointer' : ''}`}
                 >
-                  {/* Row Number */}
-                  <td className="px-3 py-3 text-slate-400 text-xs text-center select-none bg-slate-50/30">
+                  <td 
+                    className="px-3 py-3 text-slate-400 text-xs text-center select-none bg-slate-50/30 sticky left-0 z-10 border-r border-slate-100 cursor-pointer hover:bg-blue-50 active:bg-blue-100"
+                    onMouseDown={(e) => handleCellMouseDown(rowIndex, -1, e)}
+                  >
                     {row._originalIndex + 1}
                   </td>
 
                   {columns.map((col, colIndex) => {
                     const isEditing = editingCell?.rowIndex === row._originalIndex && editingCell?.col === col;
+                    const isSelected = isCellSelected(rowIndex, colIndex);
                     
                     return (
                         <td 
                             key={`${row._originalIndex}-${colIndex}`} 
-                            className={`px-6 py-3 text-slate-600 whitespace-nowrap max-w-xs truncate ${isEditable ? 'cursor-cell' : ''}`}
-                            title={!isEditing ? String(row[col]) : ''}
+                            className={`px-6 py-3 text-slate-600 whitespace-nowrap max-w-xs truncate border-x border-transparent transition-all
+                              ${isSelected ? 'bg-blue-100/70 border-blue-200 z-[1] ring-1 ring-blue-300 ring-inset' : ''}
+                              ${isEditable ? 'cursor-cell' : 'cursor-default'}`}
+                            onMouseDown={(e) => handleCellMouseDown(rowIndex, colIndex, e)}
+                            onMouseEnter={() => handleCellMouseEnter(rowIndex, colIndex)}
                             onDoubleClick={() => startEditing(row, col)}
                         >
                         {isEditing ? (
@@ -279,7 +398,6 @@ export const DataTable: React.FC<DataTableProps> = ({
                           if (onRowDelete) onRowDelete(row._originalIndex);
                         }}
                         className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-md transition-colors opacity-0 group-hover:opacity-100"
-                        title="Delete row"
                       >
                         <Trash2 className="w-4 h-4" />
                       </button>
@@ -290,57 +408,39 @@ export const DataTable: React.FC<DataTableProps> = ({
             ) : (
               <tr>
                 <td colSpan={columns.length + (isEditable ? 2 : 1)} className="px-6 py-12 text-center text-slate-500">
-                  No matches found for "{searchTerm}"
+                  No data found
                 </td>
               </tr>
-            )}
-            
-            {/* Quick Add Row Button at bottom of table if on last page and editable */}
-            {isEditable && onRowAdd && paginatedData.length > 0 && currentPage === totalPages && (
-               <tr>
-                 <td colSpan={columns.length + 2} className="px-0 py-0">
-                    <button 
-                      onClick={onRowAdd}
-                      className="w-full py-3 flex items-center justify-center text-slate-400 hover:text-blue-600 hover:bg-blue-50 transition-colors border-t border-dashed border-slate-200 text-sm font-medium"
-                    >
-                      <Plus className="w-4 h-4 mr-2" />
-                      Add New Row
-                    </button>
-                 </td>
-               </tr>
             )}
           </tbody>
         </table>
       </div>
 
-      {/* Pagination Footer */}
-      <div className="p-3 border-t border-slate-200 bg-slate-50 flex items-center justify-between">
-        <div className="text-xs text-slate-500 hidden sm:block">
-          Page {currentPage} of {totalPages || 1}
-        </div>
-        <div className="flex items-center space-x-2">
-          <Button
-            variant="secondary"
-            size="sm"
-            disabled={currentPage === 1}
-            onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-            icon={<ChevronLeft className="w-4 h-4" />}
-          >
-            Prev
-          </Button>
-          <div className="text-sm font-medium text-slate-700 sm:hidden">
-            {currentPage} / {totalPages || 1}
+      {/* Excel Stats Bar */}
+      {stats && stats.numericCount > 0 && (
+        <div className="bg-blue-600 text-white px-6 py-2.5 flex items-center space-x-6 text-xs font-medium border-t border-blue-500 shadow-lg z-20">
+          <div className="flex items-center opacity-80">
+            <Calculator className="w-3.5 h-3.5 mr-2" />
+            <span className="uppercase tracking-wider">Quick Stats</span>
           </div>
-          <Button
-            variant="secondary"
-            size="sm"
-            disabled={currentPage === totalPages || totalPages === 0}
-            onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-          >
-            Next <ChevronRight className="w-4 h-4 ml-1 inline-block" />
-          </Button>
+          <div className="h-4 w-px bg-white/20"></div>
+          <div className="flex flex-wrap gap-x-6 gap-y-1">
+            <div>Average: <span className="font-bold">{formatStat(stats.avg)}</span></div>
+            <div>Count: <span className="font-bold">{stats.numericCount}</span></div>
+            <div>Sum: <span className="font-bold">{formatStat(stats.sum)}</span></div>
+            <div>Median: <span className="font-bold">{formatStat(stats.median)}</span></div>
+            <div>Min: <span className="font-bold">{formatStat(stats.min)}</span></div>
+            <div>Max: <span className="font-bold">{formatStat(stats.max)}</span></div>
+          </div>
         </div>
-      </div>
+      )}
+      
+      {!stats || stats.numericCount === 0 && (
+        <div className="p-3 border-t border-slate-200 bg-slate-50 flex items-center justify-between text-xs text-slate-500">
+           <span>{sortedData.length} records loaded</span>
+           <span className="font-medium">Excel View Active</span>
+        </div>
+      )}
     </div>
   );
 };
